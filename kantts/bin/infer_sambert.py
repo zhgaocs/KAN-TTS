@@ -6,6 +6,9 @@ import argparse
 import yaml
 import logging
 
+import json
+import re
+
 ROOT_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # NOQA: E402
 sys.path.insert(0, os.path.dirname(ROOT_PATH))  # NOQA: E402
 
@@ -152,6 +155,54 @@ def am_synthesis(symbol_seq, fsnet, ling_unit, device, se=None):
         energy_predictions,
     )
 
+def parse_symbol_sequence(symbol_sequence, ling_unit):
+    """
+    Parse the input symbol sequence to extract phoneme names (with tones) and their IDs.
+
+    Args:
+        symbol_sequence (str): Input symbol sequence string from the sentence file.
+        ling_unit (KanTtsLinguisticUnit): Linguistic unit instance to fetch phoneme IDs.
+
+    Returns:
+        tuple: A tuple of phoneme names (with tones) and IDs.
+    """
+    # Define the pattern to match phoneme blocks
+    pattern = r"{([^}]*)}"
+    matches = re.findall(pattern, symbol_sequence)
+
+    # List of phoneme names to ignore
+    # ignore_phonemes = {"#1", "#2", "#3", "#4", "#_", "#~", "[MASK]"}
+
+    phn_names_with_tone = []
+    phn_ids = []
+
+    for match in matches:
+        components = match.split("$")
+        phn_name = components[0]  # Extract phoneme name, e.g., 'y_c'
+        tone = None
+
+        # Skip ignored phonemes
+        # if phn_name in ignore_phonemes:
+            # continue
+
+        # Extract tone information
+        for component in components:
+            if component.startswith("tone"):
+                tone = component[4:]  # Get the tone number after 'tone'
+
+        # Replace 'none' tone with 5
+        if tone == "none":
+            tone = "5"
+
+        # Construct phoneme name with tone for output
+        phn_name_with_tone = f"{phn_name}{tone}" if tone else phn_name
+        phn_names_with_tone.append(phn_name_with_tone)
+
+        # Fetch phoneme ID without tone for ID lookup
+        phn_id = ling_unit.get_phoneme_id(f"@{phn_name}")
+        phn_ids.append(phn_id)
+
+    return phn_names_with_tone, phn_ids
 
 def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
     if not torch.cuda.is_available():
@@ -204,6 +255,9 @@ def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
     os.makedirs(results_dir, exist_ok=True)
     fsnet.eval()
 
+    json_output_path = os.path.join(output_dir, "inference_results.json")
+    json_results = []
+
     with open(sentence, encoding="utf-8") as f:
         for line in f:
             line = line.strip().split("\t")
@@ -221,11 +275,46 @@ def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
             if nsf_enable:
                 mel_post = denorm_f0(mel_post, norm_type=nsf_norm_type, f0_feature=f0_feature) 
 
+            # Parse symbol sequence for phoneme details
+            phn_name_seq, phn_id_seq = parse_symbol_sequence(line[1], ling_unit)
+            phn_dur_seq = dur.tolist()
+
+            # Filter out phonemes with zero duration
+            filtered_phn_name_seq = []
+            filtered_phn_id_seq = []
+            filtered_phn_dur_seq = []
+
+            for phn_name, phn_id, duration in zip(phn_name_seq, phn_id_seq, phn_dur_seq):
+                if duration != 0:  # Skip phonemes with duration 0
+                    filtered_phn_name_seq.append(phn_name)
+                    filtered_phn_id_seq.append(phn_id)
+                    filtered_phn_dur_seq.append(duration)
+
+            phn_seq_len = len(filtered_phn_name_seq)
+
+            result = {
+                "result": {
+                    # "audio": mel_post.tolist(),
+                    # "audio_len": mel_post.shape[0],
+                    # "is_end": True,
+                    "phn_dur_seq": filtered_phn_dur_seq,
+                    "phn_id_seq": filtered_phn_id_seq,
+                    "phn_name_seq": filtered_phn_name_seq,
+                    "phn_seq_len": phn_seq_len,
+                },
+                "status": 10000,
+                "status_msg": "Success"
+            }
+
+            json_results.append(result)
+
             np.save(mel_path, mel_post)
             np.savetxt(dur_path, dur)
             np.savetxt(f0_path, f0)
             np.savetxt(energy_path, energy)
 
+    with open(json_output_path, "w", encoding="utf-8") as json_file:
+        json.dump(json_results, json_file, ensure_ascii=False, indent=4)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
