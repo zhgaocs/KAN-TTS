@@ -396,3 +396,21 @@ class KanTtsLinguisticUnit(LinguisticBaseUnit):
 
     def decode_speaker_category(self, id):
         return self._id_to_speaker[id]
+
+    def get_phoneme_id(self, phoneme_name):
+        """
+        Retrieves the ID corresponding to the given phoneme name.
+        :param phoneme_name: str, the phoneme name
+        :return: int, the ID of the phoneme, or -1 if the phoneme does not exist
+        """
+        if phoneme_name in self._sy_to_id:
+            return self._sy_to_id[phoneme_name]
+        else:
+            return -1
+
+    def get_phoneme_mapping(self):
+        """
+        Retrieves the mapping between phoneme names and their IDs.
+        :return: dict, a copy of the phoneme-to-ID mapping
+        """
+        return self._sy_to_id.copy()
