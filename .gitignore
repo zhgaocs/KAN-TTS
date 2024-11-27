@@ -163,5 +163,5 @@ cython_debug/
 .DS_Store
 
 # Ignore specific directories
-kantts/inference/models
-kantts/inference/outputs
+kantts/exp/models
+kantts/exp/*/output
