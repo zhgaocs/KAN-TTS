@@ -26,10 +26,35 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+def update_json_with_audio(wav_path):
+    import os
+    import base64
+    import json
+
+    json_path = os.path.splitext(wav_path)[0] + ".json"
+
+    if not os.path.exists(json_path):
+        raise FileNotFoundError(f"JSON file {json_path} does not exist.")
+
+    with open(json_path, "r", encoding="utf-8") as json_file:
+        json_data = json.load(json_file)
+
+    with open(wav_path, "rb") as wav_file:
+        wav_data = wav_file.read()
+        audio_base64 = base64.b64encode(wav_data).decode("utf-8")
+
+    import soundfile as sf
+    wav_audio, sr = sf.read(wav_path)
+    audio_len = int(len(wav_audio) / sr * 1000)
+
+    json_data["result"]["audio"] = audio_base64
+    json_data["result"]["audio_len"] = audio_len
+
+    with open(json_path, "w", encoding="utf-8") as json_file:
+        json.dump(json_data, json_file, ensure_ascii=False, indent=4)
 
 def concat_process(chunked_dir, output_dir):
     wav_files = sorted(glob(os.path.join(chunked_dir, "*.wav")))
-    print(wav_files)
     sentence_sil = 0.28  # seconds
     end_sil = 0.05  # seconds
 
@@ -59,7 +84,10 @@ def concat_process(chunked_dir, output_dir):
                 wav_concat = np.concatenate(
                     (wav_concat, np.zeros(end_sil_samples)), axis=0
                 )
-                sf.write(os.path.join(output_dir, f"{main_id}.wav"), wav_concat, sr)
+                output_wav_file = os.path.join(output_dir, f"{main_id}.wav")
+                sf.write(output_wav_file, wav_concat, sr)
+
+                update_json_with_audio(output_wav_file)
 
             main_id += 1
             sub_id = 0
@@ -67,7 +95,10 @@ def concat_process(chunked_dir, output_dir):
 
         if cnt == len(wav_files):
             wav_concat = np.concatenate((wav_concat, np.zeros(end_sil_samples)), axis=0)
-            sf.write(os.path.join(output_dir, f"{main_id}.wav"), wav_concat, sr)
+            output_wav_file = os.path.join(output_dir, f"{main_id}.wav")
+            sf.write(output_wav_file, wav_concat, sr)
+
+            update_json_with_audio(output_wav_file)
 
 
 def text_to_wav(

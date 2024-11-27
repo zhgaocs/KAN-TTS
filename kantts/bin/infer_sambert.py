@@ -255,66 +255,97 @@ def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
     os.makedirs(results_dir, exist_ok=True)
     fsnet.eval()
 
-    json_output_path = os.path.join(output_dir, "inference_results.json")
-    json_results = []
+    # Initialize variables for managing JSON file creation
+    current_main_id = None
+    json_results = []  # This will accumulate all results for a single main_id
+
+    # Ensure the output directory for JSON files exists
+    res_wavs_dir = os.path.join(output_dir, "res_wavs")
+    os.makedirs(res_wavs_dir, exist_ok=True)
 
     with open(sentence, encoding="utf-8") as f:
         for line in f:
             line = line.strip().split("\t")
             logging.info("Inference sentence: {}".format(line[0]))
-            mel_path = "%s/%s_mel.npy" % (results_dir, line[0])
-            dur_path = "%s/%s_dur.txt" % (results_dir, line[0])
-            f0_path = "%s/%s_f0.txt" % (results_dir, line[0])
-            energy_path = "%s/%s_energy.txt" % (results_dir, line[0])
 
-            with torch.no_grad():
-                mel, mel_post, dur, f0, energy = am_synthesis(
-                    line[1], fsnet, ling_unit, device, se=se
-                )
+            # Extract the "main_id_sub_id" from the start of the sentence (e.g., "0_0")
+            match = re.match(r"^([0-9]+)_([0-9]+)", line[0])
+            if match:
+                main_id = int(match.group(1))
+                sub_id = int(match.group(2))
 
-            if nsf_enable:
-                mel_post = denorm_f0(mel_post, norm_type=nsf_norm_type, f0_feature=f0_feature) 
+                # Check if the current sentence belongs to a new main_id
+                if main_id != current_main_id:
+                    # Save the current main_id's results to a JSON file
+                    if json_results:
+                        json_filename = os.path.join(res_wavs_dir, f"{current_main_id}.json")
+                        with open(json_filename, "w", encoding="utf-8") as json_file:
+                            json.dump(json_results[0], json_file, ensure_ascii=False, indent=4)
+                    
+                    # Reset for new main_id
+                    json_results = []  # Start fresh for the new main_id
+                    current_main_id = main_id
 
-            # Parse symbol sequence for phoneme details
-            phn_name_seq, phn_id_seq = parse_symbol_sequence(line[1], ling_unit)
-            phn_dur_seq = dur.tolist()
+                mel_path = f"{results_dir}/{line[0]}_mel.npy"
+                dur_path = f"{results_dir}/{line[0]}_dur.txt"
+                f0_path = f"{results_dir}/{line[0]}_f0.txt"
+                energy_path = f"{results_dir}/{line[0]}_energy.txt"
 
-            # Filter out phonemes with zero duration
-            filtered_phn_name_seq = []
-            filtered_phn_id_seq = []
-            filtered_phn_dur_seq = []
+                with torch.no_grad():
+                    mel, mel_post, dur, f0, energy = am_synthesis(
+                        line[1], fsnet, ling_unit, device, se=se
+                    )
 
-            for phn_name, phn_id, duration in zip(phn_name_seq, phn_id_seq, phn_dur_seq):
-                if duration != 0:  # Skip phonemes with duration 0
-                    filtered_phn_name_seq.append(phn_name)
-                    filtered_phn_id_seq.append(phn_id)
-                    filtered_phn_dur_seq.append(duration)
+                if nsf_enable:
+                    mel_post = denorm_f0(mel_post, norm_type=nsf_norm_type, f0_feature=f0_feature) 
 
-            phn_seq_len = len(filtered_phn_name_seq)
+                # Parse symbol sequence for phoneme details
+                phn_name_seq, phn_id_seq = parse_symbol_sequence(line[1], ling_unit)
+                phn_dur_seq = dur.tolist()
 
-            result = {
-                "result": {
-                    # "audio": mel_post.tolist(),
-                    # "audio_len": mel_post.shape[0],
-                    # "is_end": True,
-                    "phn_dur_seq": filtered_phn_dur_seq,
-                    "phn_id_seq": filtered_phn_id_seq,
-                    "phn_name_seq": filtered_phn_name_seq,
-                    "phn_seq_len": phn_seq_len,
-                },
-                "status": 10000,
-                "status_msg": "Success"
-            }
+                # Filter out phonemes with zero duration
+                filtered_phn_name_seq = []
+                filtered_phn_id_seq = []
+                filtered_phn_dur_seq = []
 
-            json_results.append(result)
+                for phn_name, phn_id, duration in zip(phn_name_seq, phn_id_seq, phn_dur_seq):
+                    if duration != 0:  # Skip phonemes with duration 0
+                        filtered_phn_name_seq.append(phn_name)
+                        filtered_phn_id_seq.append(phn_id)
+                        filtered_phn_dur_seq.append(duration)
 
-            np.save(mel_path, mel_post)
-            np.savetxt(dur_path, dur)
-            np.savetxt(f0_path, f0)
-            np.savetxt(energy_path, energy)
+                phn_seq_len = len(filtered_phn_name_seq)
 
-    with open(json_output_path, "w", encoding="utf-8") as json_file:
-        json.dump(json_results, json_file, ensure_ascii=False, indent=4)
+                # Create a new entry for the current segment
+                result = {
+                    "result": {
+                        "audio": 0,
+                        "audio_len": 0,
+                        "is_end": False,  # Default value, will be updated later for the last entry
+                        "phn_dur_seq": filtered_phn_dur_seq,
+                        "phn_id_seq": filtered_phn_id_seq,
+                        "phn_name_seq": filtered_phn_name_seq,
+                        "phn_seq_len": phn_seq_len,
+                    },
+                    "status": 10000,
+                    "status_msg": "Success"
+                }
+
+                # Append to the list for the current main_id
+                json_results.append(result)
+
+                np.save(mel_path, mel_post)
+                np.savetxt(dur_path, dur)
+                np.savetxt(f0_path, f0)
+                np.savetxt(energy_path, energy)
+
+    # After the loop ends, save the last JSON file
+    if json_results:
+        # Set "is_end" for the last segment
+        json_results[-1]["result"]["is_end"] = True  
+        json_filename = os.path.join(res_wavs_dir, f"{current_main_id}.json")
+        with open(json_filename, "w", encoding="utf-8") as json_file:
+            json.dump(json_results[0], json_file, ensure_ascii=False, indent=4)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
