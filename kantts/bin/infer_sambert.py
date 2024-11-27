@@ -225,21 +225,18 @@ def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
     ling_unit_size = ling_unit.get_unit_size()
     config["Model"]["KanTtsSAMBERT"]["params"].update(ling_unit_size)
 
-    se_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("SE", False) 
+    se_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("SE", False)
     se = np.load(se_file) if se_enable else None
 
-    # nsf
-    nsf_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("NSF", False) 
+    nsf_enable = config["Model"]["KanTtsSAMBERT"]["params"].get("NSF", False)
     if nsf_enable:
         nsf_norm_type = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_norm_type", "mean_std")
         if nsf_norm_type == "mean_std":
-            f0_mvn_file = os.path.join(
-                os.path.dirname(os.path.dirname(ckpt)), "mvn.npy"
-            )
-            f0_feature = np.load(f0_mvn_file)   
-        else: # global
-            nsf_f0_global_minimum = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_f0_global_minimum", 30.0) 
-            nsf_f0_global_maximum = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_f0_global_maximum", 730.0) 
+            f0_mvn_file = os.path.join(os.path.dirname(os.path.dirname(ckpt)), "mvn.npy")
+            f0_feature = np.load(f0_mvn_file)
+        else:  # global
+            nsf_f0_global_minimum = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_f0_global_minimum", 30.0)
+            nsf_f0_global_maximum = config["Model"]["KanTtsSAMBERT"]["params"].get("nsf_f0_global_maximum", 730.0)
             f0_feature = [nsf_f0_global_maximum, nsf_f0_global_minimum]
 
     model, _, _ = model_builder(config, device)
@@ -257,7 +254,17 @@ def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
 
     # Initialize variables for managing JSON file creation
     current_main_id = None
-    json_results = []  # This will accumulate all results for a single main_id
+    json_results = {
+        "result": {
+            "audio": 0,
+            "audio_len": 0,
+            "is_end": False,
+            "phn_dur_seq": [],
+            "phn_id_seq": [],
+            "phn_name_seq": [],
+            "phn_seq_len": 0
+        }
+    }
 
     # Ensure the output directory for JSON files exists
     res_wavs_dir = os.path.join(output_dir, "res_wavs")
@@ -276,15 +283,27 @@ def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
 
                 # Check if the current sentence belongs to a new main_id
                 if main_id != current_main_id:
-                    # Save the current main_id's results to a JSON file
-                    if json_results:
+                    # If the main_id changes, save the current results to a JSON file
+                    if current_main_id is not None:
                         json_filename = os.path.join(res_wavs_dir, f"{current_main_id}.json")
+                        # Finalize the current json_results by setting "is_end" for the last entry
+                        # json_results["result"]["is_end"] = True
                         with open(json_filename, "w", encoding="utf-8") as json_file:
-                            json.dump(json_results[0], json_file, ensure_ascii=False, indent=4)
-                    
-                    # Reset for new main_id
-                    json_results = []  # Start fresh for the new main_id
+                            json.dump(json_results, json_file, ensure_ascii=False, indent=4)
+
+                    # Reset the accumulator for the new main_id
                     current_main_id = main_id
+                    json_results = {
+                        "result": {
+                            "audio": 0,
+                            "audio_len": 0,
+                            "is_end": False,
+                            "phn_dur_seq": [],
+                            "phn_id_seq": [],
+                            "phn_name_seq": [],
+                            "phn_seq_len": 0
+                        }
+                    }
 
                 mel_path = f"{results_dir}/{line[0]}_mel.npy"
                 dur_path = f"{results_dir}/{line[0]}_dur.txt"
@@ -297,7 +316,7 @@ def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
                     )
 
                 if nsf_enable:
-                    mel_post = denorm_f0(mel_post, norm_type=nsf_norm_type, f0_feature=f0_feature) 
+                    mel_post = denorm_f0(mel_post, norm_type=nsf_norm_type, f0_feature=f0_feature)
 
                 # Parse symbol sequence for phoneme details
                 phn_name_seq, phn_id_seq = parse_symbol_sequence(line[1], ling_unit)
@@ -314,38 +333,26 @@ def am_infer(sentence, ckpt, output_dir, se_file=None, config=None):
                         filtered_phn_id_seq.append(phn_id)
                         filtered_phn_dur_seq.append(duration)
 
-                phn_seq_len = len(filtered_phn_name_seq)
+                # Add current sub_id's phoneme data to the accumulated json_results
+                json_results["result"]["phn_dur_seq"].extend(filtered_phn_dur_seq)
+                json_results["result"]["phn_id_seq"].extend(filtered_phn_id_seq)
+                json_results["result"]["phn_name_seq"].extend(filtered_phn_name_seq)
 
-                # Create a new entry for the current segment
-                result = {
-                    "result": {
-                        "audio": 0,
-                        "audio_len": 0,
-                        "is_end": False,  # Default value, will be updated later for the last entry
-                        "phn_dur_seq": filtered_phn_dur_seq,
-                        "phn_id_seq": filtered_phn_id_seq,
-                        "phn_name_seq": filtered_phn_name_seq,
-                        "phn_seq_len": phn_seq_len,
-                    },
-                    "status": 10000,
-                    "status_msg": "Success"
-                }
-
-                # Append to the list for the current main_id
-                json_results.append(result)
+                # Update the phoneme sequence length
+                json_results["result"]["phn_seq_len"] = len(json_results["result"]["phn_name_seq"])
 
                 np.save(mel_path, mel_post)
                 np.savetxt(dur_path, dur)
                 np.savetxt(f0_path, f0)
                 np.savetxt(energy_path, energy)
 
-    # After the loop ends, save the last JSON file
-    if json_results:
-        # Set "is_end" for the last segment
-        json_results[-1]["result"]["is_end"] = True  
-        json_filename = os.path.join(res_wavs_dir, f"{current_main_id}.json")
-        with open(json_filename, "w", encoding="utf-8") as json_file:
-            json.dump(json_results[0], json_file, ensure_ascii=False, indent=4)
+        # After the loop ends, save the last JSON file for the final main_id
+        if json_results["result"]["phn_name_seq"]:
+            # Finalize the last entry with "is_end": True
+            json_results["result"]["is_end"] = True
+            json_filename = os.path.join(res_wavs_dir, f"{current_main_id}.json")
+            with open(json_filename, "w", encoding="utf-8") as json_file:
+                json.dump(json_results, json_file, ensure_ascii=False, indent=4)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
