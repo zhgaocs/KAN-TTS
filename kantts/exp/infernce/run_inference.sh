@@ -2,8 +2,8 @@
 
 export CUDA_VISIBLE_DEVICES=0
 
-INPUT_FILE="../inputs/example_sentences.txt"
-OUTPUT_DIR="../outputs/$(date +%Y%m%d_%H%M%S)"
+INPUT_FILE="../input/example_sentences.txt"
+OUTPUT_DIR="output/$(date +%Y%m%d_%H%M%S)"
 RESOURCE_ZIP="../models/speech_sambert-hifigan_tts_chuangirl_Sichuan_16k/resource.zip"
 VOC_CKPT="../models/speech_sambert-hifigan_tts_chuangirl_Sichuan_16k/basemodel_16k/hifigan/ckpt/checkpoint_340000.pth"
 AM_CKPT="../models/speech_sambert-hifigan_tts_chuangirl_Sichuan_16k/basemodel_16k/sambert/ckpt/checkpoint_980000.pth"
